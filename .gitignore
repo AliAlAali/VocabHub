@@ -1,0 +1,24 @@
+﻿# Build folders
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+
+# VS Code
+.vscode/
+
+# Rider
+.idea/
+
+# Logs
+*.log
+
+# Environment files
+.env
+
+# App settings (protect secrets)
+appsettings.Development.json
+appsettings.Local.json
+/.gitignore
