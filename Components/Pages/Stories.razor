@@ -1,0 +1,80 @@
+﻿@page "/stories"
+
+@inject VocabHubDbContext DbContext
+@inject NavigationManager NavigationManager
+@inject DialogService DialogService
+
+@using Microsoft.EntityFrameworkCore
+@using VocabHub.Data.Models
+
+<PageTitle>Stories</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Gap="1rem" Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="New Story" Icon="add" Click="@(() => { NavigationManager.NavigateTo("create-story"); })" />
+    </RadzenStack>
+    <RadzenDataGrid @ref=@storiesGrid Data="stories" TItem="Story" AllowPaging=true PageSize="15" ShowPagingSummary=true>
+        <Columns>
+            <RadzenDataGridColumn title="Title" Property="@nameof(Story.Title)"></RadzenDataGridColumn>
+            <RadzenDataGridColumn title="# Words">
+                <Template Context="story">
+                    @story.StoryWords.Count()
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn title="Score">
+                <Template Context="story">
+                    @(string.Format("{0:p}", story.StoryWords.Sum(w => w.Word.UserWordKnowledges.FirstOrDefault() == null ?
+                                        0 : w.Word.UserWordKnowledges.First().KnowledgeLevel) /
+                                        ((double) story.StoryWords.Count * 5)))
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn>
+                <Template Context="story">
+                    <RadzenButton Variant="Variant.Text" ButtonStyle=ButtonStyle.Info Icon="open_in_new"
+                                  Click="@(() =>{NavigationManager.NavigateTo($"story/{story.Id}");})"></RadzenButton>
+                    <RadzenButton Variant="Variant.Text" ButtonStyle=ButtonStyle.Danger Icon="delete"
+                                  Click="@(() =>{ DeleteStory(story);})"></RadzenButton>
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@code {
+    private IEnumerable<Story> stories;
+    private RadzenDataGrid<Story> storiesGrid;
+
+    protected override Task OnInitializedAsync()
+    {
+        stories = DbContext.Stories
+            .Include(s => s.StoryWords)
+            .ThenInclude(sw => sw.Word)
+            .ThenInclude(w => w.UserWordKnowledges);
+
+        return base.OnInitializedAsync();
+    }
+
+    private async Task DeleteStory(Story story)
+    {
+        var confirmOptions = new ConfirmOptions()
+        {
+            OkButtonText = "Delete",
+            CancelButtonText = "Cancel",
+        };
+
+        var confirmation = await DialogService.Confirm($"Are you sure to delete \"{story.Title}\"?", "Delete Story", confirmOptions);
+        if (confirmation ?? false)
+        {
+            try
+            {
+                DbContext.Remove(story);
+                await DbContext.SaveChangesAsync();
+                await storiesGrid.Reload();
+            }
+            catch (Exception e)
+            {
+
+            }
+        }
+    }
+}

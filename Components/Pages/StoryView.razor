@@ -1,0 +1,472 @@
+﻿@page "/story/{StoryId:int}"
+
+@using Microsoft.EntityFrameworkCore
+@using System.Text
+@using System.Globalization
+@using VocabHub.Business
+@using VocabHub.Data.Models
+@inject VocabHubDbContext DbContext
+@inject StoryGenerator StoryGenerator
+@inject NavigationManager Navigation
+
+<PageTitle>Story View - GRE Word Learning</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenRow>
+        <RadzenColumn Size="12">
+            <RadzenCard>
+                <RadzenText TextStyle="TextStyle.H3">@Thread.CurrentThread.CurrentCulture.TextInfo.ToTitleCase(story?.Title ?? string.Empty)</RadzenText>
+                <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-color-secondary">
+                    Created on @story?.CreatedAt.ToString("MMMM dd, yyyy")
+                </RadzenText>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+
+    <RadzenRow>
+        <!-- Story Content Section -->
+        <RadzenColumn Size="12" SizeMD="8">
+            <RadzenCard Style="min-height: 500px;">
+                <RadzenText TextStyle="TextStyle.H5" class="rz-mb-4">Story Content</RadzenText>
+
+                @if (story != null)
+                {
+                    <div class="story-content">
+                        @RenderStoryWithParagraphs()
+                    </div>
+                }
+                else
+                {
+                    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+                }
+            </RadzenCard>
+        </RadzenColumn>
+
+        <!-- Word Details Sidebar -->
+        <RadzenColumn Size="12" SizeMD="4">
+            <RadzenCard Style="min-height: 500px; position: sticky; top: 20px;">
+                @if (selectedWord != null)
+                {
+                    <RadzenStack Gap="1rem">
+                        <RadzenText TextStyle="TextStyle.H4">@selectedWord.Text</RadzenText>
+
+                        @if (!string.IsNullOrEmpty(selectedWord.Pronunciation))
+                        {
+                            <RadzenBadge BadgeStyle="BadgeStyle.Light" Text="@selectedWord.Pronunciation" />
+                        }
+
+                        <RadzenText TextStyle="TextStyle.H6" class="rz-mt-3">Meanings:</RadzenText>
+                        @foreach (var meaning in selectedWord.WordMeanings.OrderBy(m => m.OrderIndex))
+                        {
+                            <RadzenCard Variant="Variant.Outlined">
+                                <RadzenBadge BadgeStyle="BadgeStyle.Info" Text="@meaning.PartOfSpeech" class="rz-mb-2" />
+                                <RadzenText>@meaning.Definition</RadzenText>
+                            </RadzenCard>
+                        }
+
+                    @*     @if (selectedWord.WordExamples.Any())
+                        {
+                            <RadzenText TextStyle="TextStyle.H6" class="rz-mt-3">Examples:</RadzenText>
+                            @foreach (var example in selectedWord.WordExamples)
+                            {
+                                <RadzenCard Variant="Variant.Outlined" class="rz-background-color-info-lighter">
+                                    <RadzenText TextStyle="TextStyle.Body2" Style="font-style: italic;">
+                                        "@example.ExampleSentence"
+                                    </RadzenText>
+                                </RadzenCard>
+                            }
+                        } *@
+
+                        @if (GetSimilarWords(selectedWord).Any())
+                        {
+                            <RadzenText TextStyle="TextStyle.H6" class="rz-mt-3">Similar Words:</RadzenText>
+                            <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+                                @foreach (var similarWord in GetSimilarWords(selectedWord))
+                                {
+                                    <RadzenBadge BadgeStyle="BadgeStyle.Secondary"
+                                                 Text="@similarWord.Text"
+                                                 Style="cursor: pointer;"
+                                                 @onclick="() => OnWordClick(similarWord)" />
+                                }
+                            </RadzenStack>
+                        }
+
+                        <RadzenText TextStyle="TextStyle.H6" class="rz-mt-4">Your Knowledge:</RadzenText>
+                        <RadzenSlider @bind-Value="@knowledgeLevel"
+                                      TValue="int"
+                                      Change="@(args => UpdateUserKnowledge(args))"
+                                      Min="0" Max="5"
+                                      Style="width: 100%;" />
+                        <RadzenText TextStyle="TextStyle.Caption">
+                            @GetKnowledgeLevelText(knowledgeLevel)
+                        </RadzenText>
+                    </RadzenStack>
+                }
+                else
+                {
+                    <RadzenText TextStyle="TextStyle.Body1" class="rz-color-secondary">
+                        Click on a highlighted word in the story to see its details.
+                    </RadzenText>
+                }
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+</RadzenStack>
+
+@code {
+    [Parameter]
+    public int StoryId { get; set; }
+
+    private Story? story;
+    private Word? selectedWord;
+    private int knowledgeLevel = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadStory();
+    }
+
+    private async Task LoadStory()
+    {
+        story = await DbContext.Stories
+            .Include(s => s.StoryWords)
+                .ThenInclude(sw => sw.Word)
+                    .ThenInclude(w => w.WordMeanings)
+                        .ThenInclude(w => w.WordExamples)
+            .Include(s => s.StoryWords)
+                .ThenInclude(sw => sw.Word)
+                    .ThenInclude(w => w.UserWordKnowledges)
+            .Include(s => s.StoryWords)
+                .ThenInclude(sw => sw.Word)
+                    .ThenInclude(w => w.WordSimilarityWords)
+                        .ThenInclude(ws => ws.SimilarWord)
+                            .ThenInclude(w => w.WordMeanings)
+            .Include(s => s.StoryWords)
+                .ThenInclude(sw => sw.Word)
+                    .ThenInclude(w => w.WordSimilaritySimilarWords)
+                        .ThenInclude(ws => ws.Word)
+                            .ThenInclude(w => w.WordMeanings)
+            .FirstOrDefaultAsync(s => s.Id == StoryId);
+    }
+
+    private RenderFragment RenderStoryWithClickableWords()
+    {
+        return builder =>
+        {
+            if (story == null) return;
+
+            var content = story.Content;
+            var words = story.StoryWords.Select(sw => sw.Word).ToList();
+            var segments = new List<(string text, Word? word)>();
+
+            // Parse the content and identify word positions
+            int lastIndex = 0;
+
+            // Sort words by length (longest first) to avoid partial matches
+            foreach (var word in words.OrderByDescending(w => w.Text.Length))
+            {
+                // Try both patterns
+                var patterns = new[]
+                {
+                    $@"\*\*({System.Text.RegularExpressions.Regex.Escape(word.Text)})\*\*",
+                    $@"\b({System.Text.RegularExpressions.Regex.Escape(word.Text)})\b"
+                };
+
+                foreach (var pattern in patterns)
+                {
+                    var matches = System.Text.RegularExpressions.Regex.Matches(
+                        content,
+                        pattern,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    );
+
+                    if (matches.Count > 0)
+                    {
+                        // Mark these positions in content
+                        foreach (System.Text.RegularExpressions.Match match in matches)
+                        {
+                            segments.Add((match.Groups[1].Value, word));
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Render using RenderTreeBuilder
+            int sequence = 0;
+            var tokens = TokenizeContent(content, words);
+
+            foreach (var token in tokens)
+            {
+                if (token.word != null)
+                {
+                    // Render as clickable word
+                    builder.OpenElement(sequence++, "span");
+                    builder.AddAttribute(sequence++, "class", "word-highlight");
+                    builder.AddAttribute(sequence++, "style", "font-weight: bold; color: var(--rz-secondary) !important; cursor: pointer; text-decoration: underline dotted;");
+                    builder.AddAttribute(sequence++, "title", token.word.WordMeanings.FirstOrDefault()?.Definition ?? "");
+                    builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OnWordClick(token.word)));
+                    builder.AddContent(sequence++, token.text);
+                    builder.CloseElement();
+                }
+                else
+                {
+                    // Render as plain text
+                    builder.AddContent(sequence++, token.text);
+                }
+            }
+        };
+    }
+
+    private RenderFragment RenderStoryWithParagraphs()
+    {
+        return builder =>
+        {
+            if (story == null) return;
+
+            int sequence = 0;
+
+            // Split content into paragraphs (by double newline or single newline)
+            var paragraphs = story.Content
+                .Split(new[] { "\r\n\r\n", "\n\n", "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .ToList();
+
+            // If no paragraph breaks found, create paragraphs by sentence count
+            if (paragraphs.Count == 1)
+            {
+                paragraphs = SplitIntoParagraphsBySentences(story.Content);
+            }
+
+            var words = story.StoryWords.Select(sw => sw.Word).ToList();
+
+            foreach (var paragraph in paragraphs)
+            {
+                // Render paragraph
+                builder.OpenElement(sequence++, "p");
+                builder.AddAttribute(sequence++, "class", "story-paragraph");
+
+                var tokens = TokenizeContent(paragraph, words);
+
+                foreach (var token in tokens)
+                {
+                    if (token.word != null)
+                    {
+                        // Render as clickable word
+                        builder.OpenElement(sequence++, "span");
+                        builder.AddAttribute(sequence++, "class", "word-highlight");
+                        builder.AddAttribute(sequence++, "style", "font-weight: bold; color: var(--rz-secondary) !important; cursor: pointer;");
+                        builder.AddAttribute(sequence++, "title", token.word.WordMeanings.FirstOrDefault()?.Definition ?? "");
+                        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OnWordClick(token.word)));
+                        builder.AddContent(sequence++, token.text);
+                        builder.CloseElement();
+                    }
+                    else
+                    {
+                        // Render as plain text
+                        builder.AddContent(sequence++, token.text);
+                    }
+                }
+
+                builder.CloseElement(); // Close paragraph
+            }
+        };
+    }
+
+    private List<string> SplitIntoParagraphsBySentences(string content)
+    {
+        // Split by periods, but keep the period with the sentence
+        var sentences = System.Text.RegularExpressions.Regex.Split(content, @"(?<=[.!?])\s+");
+        var paragraphs = new List<string>();
+
+        // Group every 2-3 sentences into a paragraph
+        var currentParagraph = new StringBuilder();
+        int sentenceCount = 0;
+
+        foreach (var sentence in sentences)
+        {
+            if (string.IsNullOrWhiteSpace(sentence)) continue;
+
+            currentParagraph.Append(sentence).Append(" ");
+            sentenceCount++;
+
+            if (sentenceCount >= 3)
+            {
+                paragraphs.Add(currentParagraph.ToString().Trim());
+                currentParagraph.Clear();
+                sentenceCount = 0;
+            }
+        }
+
+        // Add remaining sentences
+        if (currentParagraph.Length > 0)
+        {
+            paragraphs.Add(currentParagraph.ToString().Trim());
+        }
+
+        return paragraphs.Any() ? paragraphs : new List<string> { content };
+    }
+
+    private List<(string text, Word? word)> TokenizeContent(string content, List<Word> words)
+    {
+        var tokens = new List<(string text, Word? word)>();
+        var processedContent = content;
+        var wordPositions = new List<(int start, int end, Word word)>();
+
+        // Find all word positions
+        foreach (var word in words.OrderByDescending(w => w.Text.Length))
+        {
+            var patterns = new[]
+            {
+                $@"\*\*({System.Text.RegularExpressions.Regex.Escape(word.Text)})\*\*",
+                $@"\b({System.Text.RegularExpressions.Regex.Escape(word.Text)})\b"
+            };
+
+            foreach (var pattern in patterns)
+            {
+                var matches = System.Text.RegularExpressions.Regex.Matches(
+                    content,
+                    pattern,
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                );
+
+                foreach (System.Text.RegularExpressions.Match match in matches)
+                {
+                    wordPositions.Add((match.Groups[1].Index, match.Groups[1].Index + match.Groups[1].Length, word));
+                }
+
+                if (matches.Count > 0) break;
+            }
+        }
+
+        // Remove asterisks from content
+        processedContent = System.Text.RegularExpressions.Regex.Replace(content, @"\*\*", "");
+
+        // Sort positions and create tokens
+        wordPositions = wordPositions.OrderBy(p => p.start).ToList();
+
+        int currentPos = 0;
+        foreach (var (start, end, word) in wordPositions)
+        {
+            // Add text before word
+            if (start > currentPos)
+            {
+                tokens.Add((processedContent.Substring(currentPos, start - currentPos), null));
+            }
+
+            // Add word
+            tokens.Add((processedContent.Substring(start, end - start), word));
+            currentPos = end;
+        }
+
+        // Add remaining text
+        if (currentPos < processedContent.Length)
+        {
+            tokens.Add((processedContent.Substring(currentPos), null));
+        }
+
+        return tokens;
+    }
+
+    private async Task OnWordClick(Word word)
+    {
+        selectedWord = word;
+        await LoadKnowledgeLevel();
+        StateHasChanged();
+    }
+
+    private async Task LoadKnowledgeLevel()
+    {
+        if (selectedWord == null) return;
+
+        var userId = "current-user";
+
+        var knowledge = await DbContext.UserWordKnowledges
+            .FirstOrDefaultAsync(uwk => uwk.WordId == selectedWord.Id);
+
+        knowledgeLevel = knowledge?.KnowledgeLevel ?? 0;
+    }
+
+    private async Task UpdateKnowledgeLevel(int value)
+    {
+        if (selectedWord == null) return;
+
+        var userId = "current-user";
+
+        var knowledge = await DbContext.UserWordKnowledges
+            .FirstOrDefaultAsync(uwk => uwk.UserId == userId && uwk.WordId == selectedWord.Id);
+
+        if (knowledge == null)
+        {
+            knowledge = new UserWordKnowledge
+            {
+                UserId = userId,
+                WordId = selectedWord.Id,
+                KnowledgeLevel = value,
+                ReviewCount = 1,
+                LastReviewedAt = DateTime.UtcNow
+            };
+            DbContext.UserWordKnowledges.Add(knowledge);
+        }
+        else
+        {
+            knowledge.KnowledgeLevel = value;
+            knowledge.ReviewCount++;
+            knowledge.LastReviewedAt = DateTime.UtcNow;
+        }
+
+        await DbContext.SaveChangesAsync();
+    }
+
+    private List<Word> GetSimilarWords(Word word)
+    {
+        var similarWords = new List<Word>();
+
+        if (word.WordSimilaritySimilarWords != null)
+            similarWords.AddRange(word.WordSimilaritySimilarWords.Select(ws => ws.SimilarWord));
+
+        if (word.WordSimilarityWords != null)
+            similarWords.AddRange(word.WordSimilarityWords.Select(ws => ws.Word));
+
+        return similarWords.DistinctBy(w => w.Id).ToList();
+    }
+
+    private string GetKnowledgeLevelText(int level)
+    {
+        return level switch
+        {
+            0 => "Unknown",
+            1 => "Beginner",
+            2 => "Familiar",
+            3 => "Comfortable",
+            4 => "Proficient",
+            5 => "Mastered",
+            _ => "Unknown"
+        };
+    }
+
+    private async Task UpdateUserKnowledge(int level)
+    {
+        if(selectedWord is not null)
+        {
+            var userLevel = selectedWord.UserWordKnowledges.FirstOrDefault();
+            if(userLevel is null)
+            {
+                selectedWord.UserWordKnowledges.Add(new UserWordKnowledge()
+                {
+                    KnowledgeLevel = level,
+                    UserId = string.Empty,
+                    ReviewCount = 0,
+                    CreatedAt = DateTime.Now
+                });
+
+            }
+            else
+            {
+                userLevel.KnowledgeLevel = level;
+            }
+
+            await DbContext.SaveChangesAsync();
+        }
+    }
+}

@@ -1,0 +1,165 @@
+﻿@page "/create-story"
+
+@using Microsoft.EntityFrameworkCore
+@using VocabHub.Business
+@using VocabHub.Data.Models
+@inject VocabHubDbContext DbContext
+@inject StoryGenerator StoryGenerator
+@inject NavigationManager Navigation
+@inject NotificationService NotificationService
+
+<PageTitle>Create Story - GRE Word Learning</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenRow>
+        <RadzenColumn Size="12">
+            <RadzenCard>
+                <RadzenText TextStyle="TextStyle.H3">Create New Story</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body1" class="rz-color-secondary">
+                    Enter words to include in your learning story
+                </RadzenText>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+
+    <RadzenRow>
+        <RadzenColumn Size="12">
+            <RadzenCard>
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="Story Title" Variant="Variant.Outlined">
+                        <RadzenTextBox @bind-Value="generatedStory.Title" Style="width: 100%;" />
+                    </RadzenFormField>
+
+                    <RadzenFormField Text="Enter Words (comma-separated)" Variant="Variant.Outlined">
+                        <RadzenTextArea @bind-Value="wordInput" Rows="3" Style="width: 100%;"
+                                        Placeholder="e.g., ephemeral, ubiquitous, pragmatic, eloquent" />
+                    </RadzenFormField>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem">
+                        <RadzenButton Text="Generate Story"
+                                      Icon="auto_stories"
+                                      Disabled=@isGeneratingStory
+                                      IsBusy=@isGeneratingStory
+                                      BusyText="Generating Story..."
+                                      ButtonStyle="ButtonStyle.Primary"
+                                      Click="GenerateStory" />
+                        <RadzenButton Text="Clear"
+                                      Icon="clear"
+                                      Disabled=@isGeneratingStory
+                                      ButtonStyle="ButtonStyle.Light"
+                                      Click="Clear" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+
+    @if (selectedWords.Any())
+    {
+        <RadzenRow>
+            <RadzenColumn Size="12">
+                <RadzenCard>
+                    <RadzenText TextStyle="TextStyle.H5" class="rz-mb-3">Selected Words (@selectedWords.Count)</RadzenText>
+                    <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="0.5rem">
+                        @foreach (var word in selectedWords)
+                        {
+                            <RadzenBadge BadgeStyle="BadgeStyle.Success" Text="@word.Text" />
+                        }
+                    </RadzenStack>
+                </RadzenCard>
+            </RadzenColumn>
+        </RadzenRow>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(generatedStory?.Content))
+    {
+        <RadzenRow>
+            <RadzenColumn Size="12">
+                <RadzenCard>
+                    <RadzenText TextStyle="TextStyle.H5" class="rz-mb-3">Preview</RadzenText>
+                    <div class="story-preview">
+                        @generatedStory.Content
+                    </div>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" class="rz-mt-4">
+                        <RadzenButton Text="Save & View Story"
+                                      Icon="save"
+                                      Disabled=@isGeneratingStory
+                                      ButtonStyle="ButtonStyle.Success"
+                                      Click="SaveStory" />
+                        <RadzenButton Text="Regenerate"
+                                      Icon="refresh"
+                                      Disabled=@isGeneratingStory
+                                      IsBusy=@isGeneratingStory
+                                      BusyText="Generating Story..."
+                                      ButtonStyle="ButtonStyle.Secondary"
+                                      Click="GenerateStory" />
+                    </RadzenStack>
+                </RadzenCard>
+            </RadzenColumn>
+        </RadzenRow>
+    }
+</RadzenStack>
+
+@code {
+    private string wordInput = string.Empty;
+    private List<Word> selectedWords = new();
+    private Story generatedStory = new();
+    private bool isGeneratingStory = false;
+
+    private async Task GenerateStory()
+    {
+        isGeneratingStory = true;
+
+        if (string.IsNullOrWhiteSpace(wordInput))
+        {
+            NotificationService.Notify(NotificationSeverity.Warning, "Please enter some words");
+            isGeneratingStory = false;
+            return;
+        }
+
+        var wordTexts = wordInput.Split(',')
+            .Select(w => w.Trim().ToLower())
+            .Where(w => !string.IsNullOrEmpty(w))
+            .Distinct()
+            .ToList();
+
+        // Find words in database
+        selectedWords = await DbContext.Words
+            .Include(w => w.WordMeanings)
+            .Where(w => wordTexts.Contains(w.Text.ToLower()))
+            .ToListAsync();
+
+        if (!selectedWords.Any())
+        {
+            NotificationService.Notify(NotificationSeverity.Error, "No matching words found in database");
+            return;
+        }
+
+        // Generate story
+        generatedStory = await StoryGenerator.GenerateStory(selectedWords);
+
+        NotificationService.Notify(NotificationSeverity.Success,
+            $"Story generated with {selectedWords.Count} words!");
+
+        isGeneratingStory = false;
+    }
+
+    private async Task SaveStory()
+    {
+        if (generatedStory == null) return;
+
+        DbContext.Stories.Add(generatedStory);
+        await DbContext.SaveChangesAsync();
+
+        NotificationService.Notify(NotificationSeverity.Success, "Story saved successfully!");
+        Navigation.NavigateTo($"/story/{generatedStory.Id}");
+    }
+
+    private void Clear()
+    {
+        wordInput = string.Empty;
+        selectedWords.Clear();
+        generatedStory = null;
+    }
+}

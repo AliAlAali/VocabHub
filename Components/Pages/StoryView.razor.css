@@ -1,0 +1,26 @@
+﻿.story-content {
+    font-size: 1.1rem;
+    line-height: 1.8;
+}
+
+.story-paragraph {
+    margin-bottom: 1.5rem;
+    text-align: justify;
+    text-indent: 2em; /* Optional: indent first line of each paragraph */
+}
+
+    .story-paragraph:first-of-type {
+        text-indent: 0; /* Don't indent first paragraph */
+    }
+
+.word-highlight {
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+    .word-highlight:hover {
+        color: #0056b3 !important;
+        background-color: #e7f3ff;
+        padding: 2px 4px;
+        border-radius: 3px;
+    }

@@ -1,0 +1,44 @@
+﻿@page "/words"
+
+@inject VocabHubDbContext DbContext
+@inject NavigationManager NavigationManager
+
+@using Microsoft.EntityFrameworkCore
+@using VocabHub.Data.Models
+
+<PageTitle>Words</PageTitle>
+<RadzenStack Gap="1rem">
+    <RadzenStack Gap="1rem" Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="New Word(s)" Icon="add" Click="@(() => { NavigationManager.NavigateTo("create-word"); })" />
+    </RadzenStack>
+    <RadzenDataGrid Data="words" TItem="WordInfo" AllowPaging=true PageSize="15" ShowPagingSummary=true
+        AllowSorting=true AllowFiltering=true>
+        <Columns>
+            <RadzenDataGridColumn title="Word" Property="@nameof(WordInfo.Text)"></RadzenDataGridColumn>
+            <RadzenDataGridColumn title="User Knowledge" Property="@(nameof(WordInfo.Level))"></RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@code {
+    private IEnumerable<WordInfo> words;
+
+    protected override Task OnInitializedAsync()
+    {
+        words = DbContext.Words
+        .Include(w => w.UserWordKnowledges)
+        .Select(w => new WordInfo()
+        {
+            Text = w.Text,
+            Level = w.UserWordKnowledges.FirstOrDefault() == null ? null : w.UserWordKnowledges.First().KnowledgeLevel
+        });
+
+        return base.OnInitializedAsync();
+    }
+
+    private class WordInfo
+    {
+        public string Text { get; set; }
+        public int? Level { get; set; }
+    }
+}

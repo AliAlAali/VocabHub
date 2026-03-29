@@ -1,0 +1,168 @@
+﻿@page "/create-word"
+@using Microsoft.EntityFrameworkCore
+@using VocabHub.Data.Models
+@using VocabHub.Providers.WordDictionary
+
+@inject IWordDictionary WordDictionary
+@inject NotificationService NotificationService
+@inject VocabHubDbContext DbContext
+
+<h3>Register Word(s)</h3>
+<RadzenStack Gap="1rem">
+    <RadzenRow Gap="1rem">
+        <RadzenColumn Size="12">
+            <RadzenCard>
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="Enter Words (comma-separated)" Variant="Variant.Outlined">
+                        <RadzenTextArea @bind-Value="wordInput" Rows="3" Style="width: 100%;"
+                                        Placeholder="e.g., ephemeral, ubiquitous, pragmatic, eloquent" />
+                    </RadzenFormField>
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" JustifyContent=JustifyContent.End class="rz-mt-4">
+                        <RadzenButton Text="Generate"
+                                      Icon="dictionary"
+                                      Disabled=@(string.IsNullOrWhiteSpace(wordInput) || isGenerating)
+                                      IsBusy=@isGenerating
+                                      BusyText="Generating..."
+                                      Click="Generate"
+                                      ButtonStyle="ButtonStyle.Secondary" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        </RadzenColumn>
+    </RadzenRow>
+    @if (words is not null && words.Count() > 0)
+    {
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12">
+                <RadzenCard>
+                    <RadzenStack Gap="1rem">
+                        <RadzenDataGrid @ref=@wordsGrid Data="words" TItem="Word" AllowPaging=true PageSize="15" ShowPagingSummary=true>
+                            <Columns>
+                                <RadzenDataGridColumn title="Text" Property="@nameof(Word.Text)"></RadzenDataGridColumn>
+                                <RadzenDataGridColumn title="Pronunciation" Property="@nameof(Word.Pronunciation)"></RadzenDataGridColumn>
+                                <RadzenDataGridColumn title="# Meanings">
+                                    <Template Context="word">
+                                        @word.WordMeanings.Count
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn title="# Examples">
+                                    <Template Context="word">
+                                        @word.WordMeanings.SelectMany(m => m.WordExamples).Count()
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn title="">
+                                    <Template Context="word">
+                                        <RadzenButton ButtonStyle="ButtonStyle.Danger" Variant="Variant.Text"
+                                                      Icon="delete" Click="@(() => {RemoveWord(word);})" />
+                                        <RadzenButton ButtonStyle="ButtonStyle.Info" Variant="Variant.Text"
+                                                      Icon="refresh" Click="@(async () => {await ReloadWord(word);})" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" JustifyContent=JustifyContent.End class="rz-mt-4">
+                            <RadzenButton Text="Save"
+                                          Icon="save"
+                                          Disabled=@isGenerating
+                                          Click="Save"
+                                          ButtonStyle="ButtonStyle.Success" />
+                        </RadzenStack>
+                    </RadzenStack>
+                </RadzenCard>
+            </RadzenColumn>
+        </RadzenRow>
+    }
+</RadzenStack>
+
+@code {
+    private string wordInput = string.Empty;
+    private ICollection<Word> words;
+    private RadzenDataGrid<Word> wordsGrid;
+    private bool isGenerating = false;
+
+    protected override Task OnInitializedAsync()
+    {
+        WordDictionary.GetWord("hello");
+
+        return base.OnInitializedAsync();
+    }
+
+    private async Task Generate()
+    {
+        isGenerating = true;
+
+        var wordsList = wordInput.Split(',').Select(w => w.Trim());
+        if (wordsList.Count() > 100)
+        {
+            isGenerating = false;
+            NotificationService.Notify(NotificationSeverity.Warning, "Words count must not exceed 100 words per registration");
+            return;
+        }
+
+        var wordsResult = new List<Word>();
+        foreach (var word in wordsList)
+        {
+            if (string.IsNullOrWhiteSpace(word))
+            {
+                continue;
+            }
+
+            var result = await WordDictionary.GetWord(word);
+            if (result is not null)
+            {
+                wordsResult.Add(result);
+            }
+        }
+
+        words = wordsResult;
+        isGenerating = false;
+    }
+
+    private void RemoveWord(Word word)
+    {
+        words.Remove(word);
+        wordsGrid.Reload();
+    }
+
+    private async Task ReloadWord(Word word)
+    {
+        var result = await WordDictionary.GetWord(word.Text);
+        if (result is not null)
+        {
+            word.Text = result.Text;
+            word.Pronunciation = result.Pronunciation;
+            word.WordMeanings = result.WordMeanings;
+        }
+    }
+
+    private async Task Save()
+    {
+        // For now only add new words, do not modify previously added words
+        // Consider later versioning the words
+
+        var wordsKeys = words.Select(w => w.Text.ToLower());
+        var existingWords = DbContext.Words
+            .Where(w => wordsKeys.Contains(w.Text.ToLower()))
+            .Select(w => w.Text.ToLower())
+            .ToList();
+
+        var newWords = words.Where(w => !existingWords.Contains(w.Text.ToLower()));
+
+        try
+        {
+
+            await DbContext.Words.AddRangeAsync(newWords);
+            await DbContext.SaveChangesAsync();
+
+            words.Clear();
+            wordInput = string.Empty;
+            NotificationService.Notify(NotificationSeverity.Success, "Word(s) has been registered");
+
+        }
+        catch (Exception e)
+        {
+            var d = e?.Message;
+        }
+    }
+}
